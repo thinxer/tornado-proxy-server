@@ -1,6 +1,6 @@
-socks_server = None
-#socks_server = "localhost"
-#socks_port = 2090
+#socks_server = None
+socks_server = "localhost"
+socks_port = 2090
 
 import struct
 import socket
@@ -89,7 +89,8 @@ class ProxyHandler:
 
             self.outgoing = tcp_client(host, port, on_connected)
         else:
-            del headers[b'Proxy-Connection']
+            if b'Proxy-Connection' in headers:
+                del headers[b'Proxy-Connection']
             headers[b'Connection'] = b'close'
             if b'Host' in headers:
                 host = headers[b'Host']
