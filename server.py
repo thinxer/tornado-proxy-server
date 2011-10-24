@@ -56,9 +56,18 @@ class Connector:
 class DirectConnector(Connector):
 
     def connect(self, host, port, callback):
+
+        def on_close():
+            callback(None)
+
+        def on_connected():
+            stream.set_close_callback(None)
+            callback(stream)
+
         s = socket.socket(socket.AF_INET, socket.SOCK_STREAM, 0)
         stream = tornado.iostream.IOStream(s)
-        stream.connect((host, port), lambda: callback(stream))
+        stream.set_close_callback(on_close)
+        stream.connect((host, port), on_connected)
 
 
 class SocksConnector(Connector):
@@ -70,7 +79,11 @@ class SocksConnector(Connector):
 
     def connect(self, host, port, callback):
 
+        def socks_close():
+            callback(None)
+
         def socks_response(data):
+            stream.set_close_callback(None)
             if data[1] == 0x5a:
                 callback(stream)
             else:
@@ -82,6 +95,7 @@ class SocksConnector(Connector):
 
         s = socket.socket(socket.AF_INET, socket.SOCK_STREAM, 0)
         stream = tornado.iostream.IOStream(s)
+        stream.set_close_callback(socks_close)
         stream.connect((self.socks_server, self.socks_port), socks_connected)
 
 
