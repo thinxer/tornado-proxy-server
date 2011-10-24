@@ -1,14 +1,21 @@
-#socks_server = None
-socks_server = "localhost"
-socks_port = 2090
+#!/usr/bin/env python3
+#
+# Author: Jianfei Wang <me@thinxer.com>
+# License: MIT
+
+''' Proxy Server based on tornado. '''
 
 import struct
 import socket
-import tornado.httpclient
+import logging
 import tornado.ioloop
 import tornado.netutil
 from urllib.parse import urlparse, urlunparse
 from collections import OrderedDict
+
+socks_server = None
+#socks_server = 'localhost'
+#socks_port = 2090
 
 def header_parser(headers):
     for header in headers.split(b'\r\n'):
@@ -18,9 +25,7 @@ def header_parser(headers):
 
 def write_to(stream):
     def on_data(data):
-        #print(data)
         if data == b'':
-            #print('closing ', stream)
             stream.close()
         else:
             if not stream.closed():
@@ -33,9 +38,9 @@ def pipe(stream_a, stream_b):
     stream_a.read_until_close(writer_b, writer_b)
     stream_b.read_until_close(writer_a, writer_a)
 
+# TODO close the incoming connection if the connection failed.
 def socks_connect(stream, host, port, on_connected):
     def socks_response(data):
-        #print(data, data[1])
         if data[1] == 0x5a:
             if on_connected: on_connected()
         else:
@@ -48,7 +53,6 @@ def socks_connect(stream, host, port, on_connected):
     stream.connect((socks_server, socks_port), socks_connected)
 
 def tcp_client(host, port, on_connected = None):
-    #print("connecting to", host, port)
     s = socket.socket(socket.AF_INET, socket.SOCK_STREAM, 0)
     stream = tornado.iostream.IOStream(s)
     if socks_server:
@@ -70,12 +74,10 @@ class ProxyHandler:
 
     def on_headers(self, headers):
         headers = OrderedDict(header_parser(headers))
-        print(self.method)
-        #print(headers)
+        logging.info(self.method.decode('utf8'))
         method, url, ver = self.method.split(b' ')
         if method == b'CONNECT':
             host = url
-            print(url)
             i = host.find(b':')
             if i >= 0:
                 host, port = host[:i], int(host[i+1:])
@@ -101,7 +103,6 @@ class ProxyHandler:
                     port = 80
 
                 def on_connected():
-                    #print('connected')
                     path = urlunparse((b'', b'') + urlparse(url)[2:])
                     write_to(self.outgoing)(b' '.join((method, path, ver)))
                     write_to(self.outgoing)(b'\r\n'.join(k + b': ' + v for k, v in headers.items()))
@@ -117,7 +118,6 @@ class ProxyHandler:
 
 class ProxyServer(tornado.netutil.TCPServer):
     def handle_stream(self, stream, address):
-        #print(address, 'connected')
         ProxyHandler(stream)
 
 server = ProxyServer()
