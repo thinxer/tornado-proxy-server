@@ -24,7 +24,7 @@ def header_parser(headers):
 
 
 def hostport_parser(hostport, default_port):
-    i = hostport.find(b':')
+    i = hostport.find(b':' if isinstance(hostport, bytes) else ':')
     if i >= 0:
         return hostport[:i], int(hostport[i+1:])
     else:
@@ -164,8 +164,28 @@ class ProxyServer(tornado.netutil.TCPServer):
 
 
 def main():
-    server = ProxyServer(DirectConnector())
-    server.listen(8000)
+    import argparse
+    parser = argparse.ArgumentParser(description='Simple proxy server based on tornado')
+    parser.add_argument('-u', '--upstream', type=str, help='upstream proxy like socks://localhost:1080')
+    parser.add_argument('-b', '--bind', type=str, default=':8000', help='bind address and port, default is :8000')
+    args = parser.parse_args()
+
+    if args.upstream:
+        parts = urlparse(args.upstream)
+        if parts.scheme == 'socks':
+            logging.info('using socks proxy: %s', parts.netloc)
+            connector = SocksConnector(*hostport_parser(parts.netloc, 1080))
+        else:
+            raise NotImplementedError('Unsupported scheme', parts.scheme)
+    else:
+        logging.info('using direct connection')
+        connector = DirectConnector()
+
+    host, port = hostport_parser(args.bind, 8000)
+    server = ProxyServer(connector)
+    logging.info('listening on %s', args.bind)
+    server.listen(port, host)
+
     tornado.ioloop.IOLoop.instance().start()
 
 if __name__ == '__main__': main()
