@@ -5,6 +5,7 @@
 
 ''' Proxy Server based on tornado. '''
 
+import re
 import struct
 import socket
 import logging
@@ -48,12 +49,48 @@ def pipe(stream_a, stream_b):
     stream_b.read_until_close(writer_a, writer_a)
 
 
+def subclasses(cls, _seen = None):
+    if _seen is None: _seen = set()
+    subs = cls.__subclasses__()
+    for sub in subs:
+        if sub not in _seen:
+            _seen.add(sub)
+            yield sub
+            for sub in subclasses(sub, _seen):
+                yield sub
+
+
 class Connector:
+
+    def __init__(self, netloc = None, path = None):
+        self.netloc = netloc
+        self.path = path
+
+    @classmethod
+    def accept(cls, scheme):
+        raise NotImplementedError()
+
     def connect(self, host, port, callback):
         raise NotImplementedError()
 
+    @classmethod
+    def get(cls, url):
+        parts = urlparse(url)
+        for cls in subclasses(Connector):
+            if cls.accept(parts.scheme):
+                return cls(parts.netloc, parts.path)
+        else:
+            raise NotImplementedError('Unsupported scheme', parts.scheme)
+
+    def __str__(self):
+        return '%s(netloc=%s, path=%s)' % (self.__class__.__name__, repr(self.netloc), repr(self.path))
+
 
 class DirectConnector(Connector):
+
+    @classmethod
+    def accept(cls, scheme):
+        return scheme == 'direct'
 
     def connect(self, host, port, callback):
 
@@ -72,10 +109,13 @@ class DirectConnector(Connector):
 
 class SocksConnector(Connector):
 
-    def __init__(self, socks_server, socks_port):
-        Connector.__init__(self)
-        self.socks_server = socks_server
-        self.socks_port = socks_port
+    def __init__(self, netloc, path = None):
+        Connector.__init__(self, netloc, path)
+        self.socks_server, self.socks_port = hostport_parser(netloc, 1080)
+
+    @classmethod
+    def accept(cls, scheme):
+        return scheme == 'socks'
 
     def connect(self, host, port, callback):
 
@@ -98,6 +138,32 @@ class SocksConnector(Connector):
         stream.set_close_callback(socks_close)
         stream.connect((self.socks_server, self.socks_port), socks_connected)
 
+
+class RulesConnector(Connector):
+
+    def __init__(self, netloc = None, path = None):
+        Connector.__init__(self, netloc, path)
+        self.rules = []
+        with open(path) as f:
+            for l in f:
+                l = l.strip()
+                if not l: continue
+                if l.startswith('#'): continue
+                self.rules.append(l.split())
+        self.rules.append(['.*', 'direct://'])
+        self._connectors = {}
+
+    @classmethod
+    def accept(cls, scheme):
+        return scheme == 'rules'
+
+    def connect(self, host, port, callback):
+        for rule, upstream in self.rules:
+            if re.match(rule, host.decode() + ':' + str(port)):
+                if upstream not in self._connectors:
+                    self._connectors[upstream] = Connector.get(upstream)
+                self._connectors[upstream].connect(host, port, callback)
+                break
 
 class ProxyHandler:
     def __init__(self, stream, connector):
@@ -171,16 +237,10 @@ def main():
     args = parser.parse_args()
 
     if args.upstream:
-        parts = urlparse(args.upstream)
-        if parts.scheme == 'socks':
-            logging.info('using socks proxy: %s', parts.netloc)
-            connector = SocksConnector(*hostport_parser(parts.netloc, 1080))
-        else:
-            raise NotImplementedError('Unsupported scheme', parts.scheme)
+        connector = Connector.get(args.upstream)
     else:
-        logging.info('using direct connection')
         connector = DirectConnector()
-
+    logging.info('using connector: %s', connector)
     host, port = hostport_parser(args.bind, 8000)
     server = ProxyServer(connector)
     logging.info('listening on %s', args.bind)
