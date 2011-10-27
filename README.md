@@ -1,6 +1,7 @@
-A simple proxy server with SOCKS4a support.
+A simple proxy server with configurable upstream proxy support.
 
-Usages:
+Usages
+------
 
     ./server.py
     ./server.py -u socks://localhost:1080
@@ -14,3 +15,10 @@ The rules file looks like the following:
     .*tsinghua\.edu\.cn direct:
 
     .* socks://localhost:2090
+
+To Do
+-----
+
+    + HttpProxyConnector
+    + Keep-alive connections (both proxy connection and outgoing connection)
+    + Authentication
