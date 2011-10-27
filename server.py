@@ -5,6 +5,7 @@
 
 ''' Proxy Server based on tornado. '''
 
+import os
 import re
 import struct
 import socket
@@ -143,15 +144,27 @@ class RulesConnector(Connector):
 
     def __init__(self, netloc = None, path = None):
         Connector.__init__(self, netloc, path)
+        self._connectors = {}
+        self._modify_time = None
+        self.check_update()
+        tornado.ioloop.PeriodicCallback(self.check_update, 1000).start()
+
+    def load_rules(self):
         self.rules = []
-        with open(path) as f:
+        with open(self.path) as f:
             for l in f:
                 l = l.strip()
                 if not l: continue
                 if l.startswith('#'): continue
                 self.rules.append(l.split())
         self.rules.append(['.*', 'direct://'])
-        self._connectors = {}
+
+    def check_update(self):
+        modified = os.stat(self.path).st_mtime
+        if modified != self._modify_time:
+            logging.info('loading %s', self.path)
+            self._modify_time = modified
+            self.load_rules()
 
     @classmethod
     def accept(cls, scheme):
@@ -180,6 +193,7 @@ class ProxyHandler:
     def on_method(self, method):
         self.method, self.url, self.ver = method.strip().split(b' ')
         self.incoming.read_until(b'\r\n\r\n', self.on_headers)
+        logging.info(method.strip().decode())
 
     def on_connected(self, outgoing):
         if outgoing:
@@ -204,7 +218,6 @@ class ProxyHandler:
 
     def on_headers(self, headers_buffer):
         self.headers = OrderedDict(header_parser(headers_buffer))
-        logging.info('%s %s %s', self.method, self.url, self.ver)
         if self.method == b'CONNECT':
             host, port = hostport_parser(self.url, 443)
             self.outgoing = self.connector.connect(host, port, self.on_connect_connected)
