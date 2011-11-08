@@ -5,6 +5,7 @@
 
 ''' Proxy Server based on tornado. '''
 
+import base64
 import os
 import re
 import struct
@@ -31,6 +32,14 @@ def hostport_parser(hostport, default_port):
         return hostport[:i], int(hostport[i+1:])
     else:
         return hostport, default_port
+
+
+def netloc_parser(netloc, default_port = -1):
+    i = netloc.rfind(b'@' if isinstance(netloc, bytes) else '@')
+    if i >= 0:
+        return netloc[:i], netloc[i+1:]
+    else:
+        return None, netloc
 
 
 def write_to(stream):
@@ -140,6 +149,45 @@ class SocksConnector(Connector):
         stream.connect((self.socks_server, self.socks_port), socks_connected)
 
 
+class HttpConnector(Connector):
+
+    def __init__(self, netloc, path = None):
+        Connector.__init__(self, netloc, path)
+        auth, host = netloc_parser(netloc)
+        self.auth = base64.encodestring(auth.encode()) if auth else None
+        self.http_server, self.http_port = hostport_parser(host, 3128)
+
+    @classmethod
+    def accept(cls, scheme):
+        return scheme == 'http'
+
+    def connect(self, host, port, callback):
+
+        def http_close():
+            callback(None)
+
+        def http_response(data):
+            stream.set_close_callback(None)
+            code = int(data.split()[1])
+            if code == 200:
+                callback(stream)
+            else:
+                callback(None)
+
+        def http_connected():
+            stream.write(b'CONNECT ' + host + b':' + str(port).encode() + b' HTTP/1.1\r\n')
+            if self.auth:
+                stream.write(b'Proxy-Authorization: Basic ' + self.auth + b'\r\n')
+            stream.write(b'Proxy-Connection: closed\r\n')
+            stream.write(b'\r\n')
+            stream.read_until(b'\r\n\r\n', http_response)
+
+        s = socket.socket(socket.AF_INET, socket.SOCK_STREAM, 0)
+        stream = tornado.iostream.IOStream(s)
+        stream.set_close_callback(http_close)
+        stream.connect((self.http_server, self.http_port), http_connected)
+
+
 class RulesConnector(Connector):
 
     def __init__(self, netloc = None, path = None):
@@ -192,6 +240,7 @@ class ProxyHandler:
 
     def on_method(self, method):
         self.method, self.url, self.ver = method.strip().split(b' ')
+        # XXX would fail if the request doesn't have any more headers
         self.incoming.read_until(b'\r\n\r\n', self.on_headers)
         logging.info(method.strip().decode())
 
