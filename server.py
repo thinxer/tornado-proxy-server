@@ -8,6 +8,7 @@
 import base64
 import os
 import re
+import io
 import struct
 import socket
 import logging
@@ -95,6 +96,18 @@ class Connector:
     def __str__(self):
         return '%s(netloc=%s, path=%s)' % (self.__class__.__name__, repr(self.netloc), repr(self.path))
 
+class RejectConnector(Connector):
+    @classmethod
+    def accept(cls, scheme):
+        return scheme == 'reject'
+
+    def connect(self, host, port, callback):
+        rejectmsg = io.BytesIO()
+        def reject_request(req_callback,chunk_callback):
+            req_callback(b'HTTP/1.1 410 Gone\r\n\r\n')
+            req_callback(b'')
+        rejectmsg.read_until_close = reject_request
+        callback(rejectmsg)
 
 class DirectConnector(Connector):
 
