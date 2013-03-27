@@ -260,7 +260,7 @@ class ProxyHandler:
 
     def on_connect_connected(self, outgoing):
         if outgoing:
-            self.incoming.write(b'HTTP/1.0 200 Connection Established\r\n\r\n')
+            self.incoming.write(b'HTTP/1.1 200 Connection Established\r\n\r\n')
             pipe(self.incoming, outgoing)
         else:
             self.incoming.close()
