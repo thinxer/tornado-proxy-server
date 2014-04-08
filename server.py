@@ -13,7 +13,7 @@ import struct
 import socket
 import logging
 import tornado.ioloop
-import tornado.netutil
+import tornado.tcpserver
 from urllib.parse import urlparse, urlunparse
 from collections import OrderedDict
 
@@ -294,10 +294,10 @@ class ProxyHandler:
                 self.incoming.close()
 
 
-class ProxyServer(tornado.netutil.TCPServer):
+class ProxyServer(tornado.tcpserver.TCPServer):
 
     def __init__(self, connector = None):
-        tornado.netutil.TCPServer.__init__(self)
+        tornado.tcpserver.TCPServer.__init__(self)
         self.connector = connector or DirectConnector()
 
     def handle_stream(self, stream, address):
