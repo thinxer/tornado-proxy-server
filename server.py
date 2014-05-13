@@ -226,7 +226,16 @@ class RulesConnector(Connector):
                     continue
                 if l.startswith('#'):
                     continue
-                self.rules.append(l.split())
+                try:
+                    rule_pattern, upstream = l.split()
+                    Connector.get(upstream)
+                    rule_pattern = re.compile(rule_pattern, re.I)
+                except KeyboardInterrupt:
+                    raise
+                except:
+                    logging.error('This rule is not valid : %s' % l)
+                    continue
+                self.rules.append([rule_pattern, upstream])
         self.rules.append(['.*', 'direct://'])
 
     def check_update(self):
