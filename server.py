@@ -10,7 +10,6 @@
 import base64
 import os
 import re
-import io
 import struct
 import socket
 import logging
@@ -21,6 +20,10 @@ from urllib.parse import urlparse, urlunparse
 from collections import OrderedDict
 
 logging.getLogger().setLevel(logging.INFO)
+
+
+class Object(object):
+    pass
 
 
 def header_parser(headers):
@@ -92,10 +95,9 @@ class Connector:
     @classmethod
     def get(cls, url):
         parts = urlparse(url)
-        # noinspection PyMethodFirstArgAssignment
-        for cls in subclasses(Connector):
-            if cls.accept(parts.scheme):
-                return cls(parts.netloc, parts.path)
+        for sub_cls in subclasses(cls):
+            if sub_cls.accept(parts.scheme):
+                return sub_cls(parts.netloc, parts.path)
         else:
             raise NotImplementedError('Unsupported scheme', parts.scheme)
 
@@ -109,14 +111,16 @@ class RejectConnector(Connector):
         return scheme == 'reject'
 
     def connect(self, host, port, callback):
-        rejectmsg = io.BytesIO()
+        rejectmsg = Object()
 
-        # noinspection PyUnusedLocal
         def reject_request(req_callback, chunk_callback):
+            if chunk_callback:
+                pass
             req_callback(b'HTTP/1.1 410 Gone\r\n\r\n')
             req_callback(b'')
 
         rejectmsg.read_until_close = reject_request
+        rejectmsg.write = lambda x: x
         callback(rejectmsg)
 
 
@@ -211,10 +215,10 @@ class HttpConnector(Connector):
 class RulesConnector(Connector):
     def __init__(self, netloc=None, path=None):
         Connector.__init__(self, netloc, path)
+        self.rules = []
         self._connectors = {}
         self._modify_time = None
         self.check_update()
-        self.rules = []
         tornado.ioloop.PeriodicCallback(self.check_update, 1000).start()
 
     def load_rules(self):
@@ -233,6 +237,7 @@ class RulesConnector(Connector):
                 except KeyboardInterrupt:
                     raise
                 except:
+                    #logging.error(traceback.format_exc())
                     logging.error('This rule is not valid : %s' % l)
                     continue
                 self.rules.append([rule_pattern, upstream])
@@ -250,15 +255,19 @@ class RulesConnector(Connector):
         return scheme == 'rules'
 
     def connect(self, host, port, callback):
+        #logging.debug(self.rules)
+        s = host.decode() + ':' + str(port)
         for rule, upstream in self.rules:
-            if re.match(rule, host.decode() + ':' + str(port)):
+            if re.match(rule, s):
                 if upstream not in self._connectors:
                     self._connectors[upstream] = Connector.get(upstream)
                 self._connectors[upstream].connect(host, port, callback)
                 break
+        else:
+            raise RuntimeError('no available rule for %s' % s)
 
 
-class ProxyHandler:
+class ProxyHandler(object):
     def __init__(self, stream, connector):
         self.connector = connector
 
