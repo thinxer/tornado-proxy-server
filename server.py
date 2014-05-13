@@ -266,7 +266,7 @@ class ProxyHandler:
         self.method, self.url, self.ver = method.strip().split(b' ')
         # XXX would fail if the request doesn't have any more headers
         self.incoming.read_until(b'\r\n\r\n', self.on_headers)
-        logging.info(method.strip().decode())
+        logging.debug(method.strip().decode())
 
     def on_connected(self, outgoing):
         if outgoing:
