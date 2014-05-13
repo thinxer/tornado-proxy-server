@@ -1,19 +1,21 @@
 #!/usr/bin/env python3
+# coding=utf-8
 #
 # Author: Jianfei Wang <me@thinxer.com>
+# Author: Fengyuan Chen <jeova.sanctus.unus@gmail.com>
 # License: MIT
 
-''' Proxy Server based on tornado. '''
+""" Proxy Server based on tornado. """
 
 import base64
 import os
 import re
-import io
 import struct
 import socket
 import logging
 import tornado.ioloop
 import tornado.tcpserver
+import tornado.iostream
 from urllib.parse import urlparse, urlunparse
 from collections import OrderedDict
 
@@ -24,21 +26,22 @@ def header_parser(headers):
     for header in headers.split(b'\r\n'):
         i = header.find(b':')
         if i >= 0:
-            yield header[:i], header[i+2:]
+            yield header[:i], header[i + 2:]
 
 
 def hostport_parser(hostport, default_port):
     i = hostport.find(b':' if isinstance(hostport, bytes) else ':')
     if i >= 0:
-        return hostport[:i], int(hostport[i+1:])
+        return hostport[:i], int(hostport[i + 1:])
     else:
         return hostport, default_port
 
 
-def netloc_parser(netloc, default_port = -1):
+def netloc_parser(netloc, default_port=-1):
+    assert default_port
     i = netloc.rfind(b'@' if isinstance(netloc, bytes) else '@')
     if i >= 0:
-        return netloc[:i], netloc[i+1:]
+        return netloc[:i], netloc[i + 1:]
     else:
         return None, netloc
 
@@ -50,6 +53,7 @@ def write_to(stream):
         else:
             if not stream.closed():
                 stream.write(data)
+
     return on_data
 
 
@@ -60,20 +64,21 @@ def pipe(stream_a, stream_b):
     stream_b.read_until_close(writer_a, writer_a)
 
 
-def subclasses(cls, _seen = None):
-    if _seen is None: _seen = set()
+def subclasses(cls, _seen=None):
+    if _seen is None:
+        _seen = set()
     subs = cls.__subclasses__()
     for sub in subs:
         if sub not in _seen:
             _seen.add(sub)
             yield sub
-            for sub in subclasses(sub, _seen):
-                yield sub
+            for sub_ in subclasses(sub, _seen):
+                yield sub_
 
 
 class Connector:
 
-    def __init__(self, netloc = None, path = None):
+    def __init__(self, netloc=None, path=None):
         self.netloc = netloc
         self.path = path
 
@@ -87,27 +92,33 @@ class Connector:
     @classmethod
     def get(cls, url):
         parts = urlparse(url)
-        for cls in subclasses(Connector):
-            if cls.accept(parts.scheme):
-                return cls(parts.netloc, parts.path)
-        else:
-            raise NotImplementedError('Unsupported scheme', parts.scheme)
+        for sub_cls in subclasses(cls):
+            if sub_cls.accept(parts.scheme):
+                return sub_cls(parts.netloc, parts.path)
+        raise NotImplementedError('Unsupported scheme', parts.scheme)
 
     def __str__(self):
         return '%s(netloc=%s, path=%s)' % (self.__class__.__name__, repr(self.netloc), repr(self.path))
 
+
 class RejectConnector(Connector):
+
     @classmethod
     def accept(cls, scheme):
         return scheme == 'reject'
 
     def connect(self, host, port, callback):
-        rejectmsg = io.BytesIO()
-        def reject_request(req_callback,chunk_callback):
-            req_callback(b'HTTP/1.1 410 Gone\r\n\r\n')
-            req_callback(b'')
-        rejectmsg.read_until_close = reject_request
-        callback(rejectmsg)
+        callback(RejectConnector)
+
+    @classmethod
+    def write(cls, _):
+        pass
+
+    @classmethod
+    def read_until_close(cls, req_callback, _):
+        req_callback(b'HTTP/1.1 410 Gone\r\n\r\n')
+        req_callback(b'')
+
 
 class DirectConnector(Connector):
 
@@ -116,7 +127,6 @@ class DirectConnector(Connector):
         return scheme == 'direct'
 
     def connect(self, host, port, callback):
-
         def on_close():
             callback(None)
 
@@ -132,7 +142,7 @@ class DirectConnector(Connector):
 
 class SocksConnector(Connector):
 
-    def __init__(self, netloc, path = None):
+    def __init__(self, netloc, path=None):
         Connector.__init__(self, netloc, path)
         self.socks_server, self.socks_port = hostport_parser(netloc, 1080)
 
@@ -153,7 +163,8 @@ class SocksConnector(Connector):
                 callback(None)
 
         def socks_connected():
-            stream.write(b'\x04\x01' + struct.pack('>H', port) + b'\x00\x00\x00\x09userid\x00' + host + b'\x00')
+            stream.write(b'\x04\x01' + struct.pack('>H', port)
+                         + b'\x00\x00\x00\x09userid\x00' + host + b'\x00')
             stream.read_bytes(8, socks_response)
 
         s = socket.socket(socket.AF_INET, socket.SOCK_STREAM, 0)
@@ -164,10 +175,10 @@ class SocksConnector(Connector):
 
 class HttpConnector(Connector):
 
-    def __init__(self, netloc, path = None):
+    def __init__(self, netloc, path=None):
         Connector.__init__(self, netloc, path)
         auth, host = netloc_parser(netloc)
-        self.auth = base64.encodestring(auth.encode()) if auth else None
+        self.auth = base64.encodebytes(auth.encode()).strip() if auth else None
         self.http_server, self.http_port = hostport_parser(host, 3128)
 
     @classmethod
@@ -188,9 +199,11 @@ class HttpConnector(Connector):
                 callback(None)
 
         def http_connected():
-            stream.write(b'CONNECT ' + host + b':' + str(port).encode() + b' HTTP/1.1\r\n')
+            stream.write(b'CONNECT ' + host + b':' +
+                         str(port).encode() + b' HTTP/1.1\r\n')
             if self.auth:
-                stream.write(b'Proxy-Authorization: Basic ' + self.auth + b'\r\n')
+                stream.write(
+                    b'Proxy-Authorization: Basic ' + self.auth + b'\r\n')
             stream.write(b'Proxy-Connection: closed\r\n')
             stream.write(b'\r\n')
             stream.read_until(b'\r\n\r\n', http_response)
@@ -203,21 +216,30 @@ class HttpConnector(Connector):
 
 class RulesConnector(Connector):
 
-    def __init__(self, netloc = None, path = None):
+    def __init__(self, netloc=None, path=None):
         Connector.__init__(self, netloc, path)
+        self.rules = []
         self._connectors = {}
         self._modify_time = None
         self.check_update()
         tornado.ioloop.PeriodicCallback(self.check_update, 1000).start()
 
     def load_rules(self):
-        self.rules = []
         with open(self.path) as f:
             for l in f:
                 l = l.strip()
-                if not l: continue
-                if l.startswith('#'): continue
-                self.rules.append(l.split())
+                if not l or l.startswith('#'):
+                    continue
+                try:
+                    rule_pattern, upstream = l.split()
+                    Connector.get(upstream)
+                    rule_pattern = re.compile(rule_pattern, re.I)
+                except KeyboardInterrupt:
+                    raise
+                except:
+                    logging.error('Invalid rule: %s', l)
+                    continue
+                self.rules.append([rule_pattern, upstream])
         self.rules.append(['.*', 'direct://'])
 
     def check_update(self):
@@ -232,14 +254,19 @@ class RulesConnector(Connector):
         return scheme == 'rules'
 
     def connect(self, host, port, callback):
+        s = host.decode() + ':' + str(port)
         for rule, upstream in self.rules:
-            if re.match(rule, host.decode() + ':' + str(port)):
+            if re.match(rule, s):
                 if upstream not in self._connectors:
                     self._connectors[upstream] = Connector.get(upstream)
                 self._connectors[upstream].connect(host, port, callback)
                 break
+        else:
+            raise RuntimeError('no available rule for %s' % s)
 
-class ProxyHandler:
+
+class ProxyHandler(object):
+
     def __init__(self, stream, connector):
         self.connector = connector
 
@@ -250,12 +277,13 @@ class ProxyHandler:
         self.url = None
         self.ver = None
         self.headers = None
+        self.outgoing = None
 
     def on_method(self, method):
         self.method, self.url, self.ver = method.strip().split(b' ')
         # XXX would fail if the request doesn't have any more headers
         self.incoming.read_until(b'\r\n\r\n', self.on_headers)
-        logging.info(method.strip().decode())
+        logging.debug(method.strip().decode())
 
     def on_connected(self, outgoing):
         if outgoing:
@@ -266,7 +294,8 @@ class ProxyHandler:
             outgoing.write(b'\r\n')
             writer_in = write_to(self.incoming)
             if b'Content-Length' in self.headers:
-                self.incoming.read_bytes(int(self.headers[b'Content-Length']), outgoing.write, outgoing.write)
+                self.incoming.read_bytes(
+                    int(self.headers[b'Content-Length']), outgoing.write, outgoing.write)
             outgoing.read_until_close(writer_in, writer_in)
         else:
             self.incoming.close()
@@ -282,21 +311,23 @@ class ProxyHandler:
         self.headers = OrderedDict(header_parser(headers_buffer))
         if self.method == b'CONNECT':
             host, port = hostport_parser(self.url, 443)
-            self.outgoing = self.connector.connect(host, port, self.on_connect_connected)
+            self.outgoing = self.connector.connect(
+                host, port, self.on_connect_connected)
         else:
             if b'Proxy-Connection' in self.headers:
                 del self.headers[b'Proxy-Connection']
             self.headers[b'Connection'] = b'close'
             if b'Host' in self.headers:
                 host, port = hostport_parser(self.headers[b'Host'], 80)
-                self.outgoing = self.connector.connect(host, port, self.on_connected)
+                self.outgoing = self.connector.connect(
+                    host, port, self.on_connected)
             else:
                 self.incoming.close()
 
 
 class ProxyServer(tornado.tcpserver.TCPServer):
 
-    def __init__(self, connector = None):
+    def __init__(self, connector=None):
         tornado.tcpserver.TCPServer.__init__(self)
         self.connector = connector or DirectConnector()
 
@@ -306,9 +337,13 @@ class ProxyServer(tornado.tcpserver.TCPServer):
 
 def main():
     import argparse
-    parser = argparse.ArgumentParser(description='Simple proxy server based on tornado')
-    parser.add_argument('-u', '--upstream', type=str, help='upstream proxy like socks://localhost:1080')
-    parser.add_argument('-b', '--bind', type=str, default=':8000', help='bind address and port, default is :8000')
+
+    parser = argparse.ArgumentParser(
+        description='Simple proxy server based on tornado')
+    parser.add_argument('-u', '--upstream', type=str,
+                        help='upstream proxy like socks://localhost:1080')
+    parser.add_argument('-b', '--bind', type=str, default=':8000',
+                        help='bind address and port, default is :8000')
     args = parser.parse_args()
 
     if args.upstream:
@@ -323,4 +358,6 @@ def main():
 
     tornado.ioloop.IOLoop.instance().start()
 
-if __name__ == '__main__': main()
+
+if __name__ == '__main__':
+    main()
