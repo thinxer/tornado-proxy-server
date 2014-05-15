@@ -353,7 +353,7 @@ def main():
     logging.info('using connector: %s', connector)
     host, port = hostport_parser(args.bind, 8000)
     server = ProxyServer(connector)
-    logging.info('listening on %s', port)
+    logging.info('listening on %s:%s', host, port)
     server.listen(port, host)
 
     tornado.ioloop.IOLoop.instance().start()
