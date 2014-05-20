@@ -218,13 +218,14 @@ class RulesConnector(Connector):
 
     def __init__(self, netloc=None, path=None):
         Connector.__init__(self, netloc, path)
-        self.rules = []
+        self.rules = None
         self._connectors = {}
         self._modify_time = None
         self.check_update()
         tornado.ioloop.PeriodicCallback(self.check_update, 1000).start()
 
     def load_rules(self):
+        self.rules = []
         with open(self.path) as f:
             for l in f:
                 l = l.strip()
