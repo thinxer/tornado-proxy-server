@@ -8,6 +8,7 @@
 """ Proxy Server based on tornado. """
 
 import base64
+import tornado.options
 import os
 import re
 import struct
@@ -16,6 +17,7 @@ import logging
 import tornado.ioloop
 import tornado.tcpserver
 import tornado.iostream
+import argparse
 from urllib.parse import urlparse, urlunparse
 from collections import OrderedDict
 
@@ -163,9 +165,12 @@ class SocksConnector(Connector):
                 callback(None)
 
         def socks_connected():
-            stream.write(b'\x04\x01' + struct.pack('>H', port)
-                         + b'\x00\x00\x00\x09userid\x00' + host + b'\x00')
-            stream.read_bytes(8, socks_response)
+            try:
+                stream.write(b'\x04\x01' + struct.pack('>H', port)
+                             + b'\x00\x00\x00\x09userid\x00' + host + b'\x00')
+                stream.read_bytes(8, socks_response)
+            except tornado.iostream.StreamClosedError:
+                socks_close()
 
         s = socket.socket(socket.AF_INET, socket.SOCK_STREAM, 0)
         stream = tornado.iostream.IOStream(s)
@@ -199,14 +204,17 @@ class HttpConnector(Connector):
                 callback(None)
 
         def http_connected():
-            stream.write(b'CONNECT ' + host + b':' +
-                         str(port).encode() + b' HTTP/1.1\r\n')
-            if self.auth:
-                stream.write(
-                    b'Proxy-Authorization: Basic ' + self.auth + b'\r\n')
-            stream.write(b'Proxy-Connection: closed\r\n')
-            stream.write(b'\r\n')
-            stream.read_until(b'\r\n\r\n', http_response)
+            try:
+                stream.write(b'CONNECT ' + host + b':' +
+                             str(port).encode() + b' HTTP/1.1\r\n')
+                if self.auth:
+                    stream.write(
+                        b'Proxy-Authorization: Basic ' + self.auth + b'\r\n')
+                stream.write(b'Proxy-Connection: closed\r\n')
+                stream.write(b'\r\n')
+                stream.read_until(b'\r\n\r\n', http_response)
+            except tornado.iostream.StreamClosedError:
+                http_close()
 
         s = socket.socket(socket.AF_INET, socket.SOCK_STREAM, 0)
         stream = tornado.iostream.IOStream(s)
@@ -288,22 +296,30 @@ class ProxyHandler(object):
 
     def on_connected(self, outgoing):
         if outgoing:
-            path = urlunparse((b'', b'') + urlparse(self.url)[2:])
-            outgoing.write(b' '.join((self.method, path, self.ver)) + b'\r\n')
-            for k, v in self.headers.items():
-                outgoing.write(k + b': ' + v + b'\r\n')
-            outgoing.write(b'\r\n')
-            writer_in = write_to(self.incoming)
-            if b'Content-Length' in self.headers:
-                self.incoming.read_bytes(
-                    int(self.headers[b'Content-Length']), outgoing.write, outgoing.write)
-            outgoing.read_until_close(writer_in, writer_in)
+            try:
+                path = urlunparse((b'', b'') + urlparse(self.url)[2:])
+                outgoing.write(b' '.join((self.method, path, self.ver)) + b'\r\n')
+                for k, v in self.headers.items():
+                    outgoing.write(k + b': ' + v + b'\r\n')
+                outgoing.write(b'\r\n')
+                writer_in = write_to(self.incoming)
+                if b'Content-Length' in self.headers:
+                    self.incoming.read_bytes(
+                        int(self.headers[b'Content-Length']), outgoing.write, outgoing.write)
+                outgoing.read_until_close(writer_in, writer_in)
+            except tornado.iostream.StreamClosedError:
+                self.incoming.close()
+                outgoing.close()
         else:
             self.incoming.close()
 
     def on_connect_connected(self, outgoing):
         if outgoing:
-            self.incoming.write(b'HTTP/1.1 200 Connection Established\r\n\r\n')
+            try:
+                self.incoming.write(b'HTTP/1.1 200 Connection Established\r\n\r\n')
+            except tornado.iostream.StreamClosedError:
+                self.incoming.close()
+                outgoing.close()
             pipe(self.incoming, outgoing)
         else:
             self.incoming.close()
@@ -337,7 +353,7 @@ class ProxyServer(tornado.tcpserver.TCPServer):
 
 
 def main():
-    import argparse
+    tornado.options.options.parse_config_file('/dev/null')
 
     parser = argparse.ArgumentParser(
         description='Simple proxy server based on tornado')
